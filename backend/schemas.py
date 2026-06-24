@@ -93,7 +93,7 @@ class SyncTaskBase(BaseModel):
     target_table: str
     field_mapping: Dict[str, Any]
     sync_frequency: str
-    sync_time: Optional[datetime] = None
+    sync_time: Optional[Any] = None
 
 
 class SyncTaskCreate(SyncTaskBase):
@@ -108,8 +108,8 @@ class SyncTaskUpdate(BaseModel):
     target_table: Optional[str] = None
     field_mapping: Optional[Dict[str, Any]] = None
     sync_frequency: Optional[str] = None
-    sync_time: Optional[datetime] = None
-    is_active: Optional[bool] = None
+    sync_time: Optional[Any] = None
+    is_active: Optional[Any] = None
 
 
 class SyncTask(SyncTaskBase):

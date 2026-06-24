@@ -299,7 +299,13 @@ const SyncTasksPage: React.FC = () => {
               value={fieldMapping}
               onChange={e => setFieldMapping(e.target.value)}
               rows={6}
-              placeholder='{"source_field": "target_field"}'
+              placeholder='字段映射JSON配置示例：
+{
+  "id": "user_id",
+  "name": "user_name",
+  "create_time": "created_at"
+}
+说明：键为源表字段名，值为目标表字段名'
             />
           </Form.Item>
 
