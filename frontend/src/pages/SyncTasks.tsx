@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react'
-import { Table, Button, Modal, Form, Input, InputNumber, Select, message, Space, Tag, DatePicker } from 'antd'
+import React, { useState, useEffect, useRef } from 'react'
+import { Table, Button, Modal, Form, Input, InputNumber, Select, message, Space, Tag, DatePicker, Progress } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, PlayCircleOutlined } from '@ant-design/icons'
-import { syncTaskApi, SyncTask, sourceDBApi, targetDBApi, SourceDB, TargetDB } from '../api'
+import { syncTaskApi, SyncTask, sourceDBApi, targetDBApi, SourceDB, TargetDB, SyncProgress } from '../api'
 import dayjs, { Dayjs } from 'dayjs'
 import { formatToUTC8 } from '../utils/timeUtils'
 
@@ -17,6 +17,10 @@ const SyncTasksPage: React.FC = () => {
   const [form] = Form.useForm()
   const [fieldMapping, setFieldMapping] = useState<string>('{}')
   const [executing, setExecuting] = useState<number | null>(null)
+  const [taskProgress, setTaskProgress] = useState<{ [key: number]: SyncProgress }>({})
+  const pollingTimers = useRef<{ [key: number]: NodeJS.Timeout }>({})
+  const [progressModalVisible, setProgressModalVisible] = useState(false)
+  const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null)
 
   useEffect(() => {
     loadTasks()
@@ -123,19 +127,64 @@ const SyncTasksPage: React.FC = () => {
     }
   }
 
+  const pollProgress = async (taskId: number) => {
+    try {
+      const res = await syncTaskApi.getTaskProgress(taskId)
+      const progress = res.data
+      
+      setTaskProgress(prev => ({ ...prev, [taskId]: progress }))
+      
+      // 如果任务完成或失败，停止轮询
+      if (progress.status === 'completed' || progress.status === 'failed') {
+        if (pollingTimers.current[taskId]) {
+          clearInterval(pollingTimers.current[taskId])
+          delete pollingTimers.current[taskId]
+        }
+        setExecuting(null)
+        await loadTasks()
+        
+        if (progress.status === 'completed') {
+          message.success('同步任务完成')
+        } else {
+          message.error('同步任务失败')
+        }
+        
+        // 延迟关闭进度弹窗
+        setTimeout(() => {
+          if (selectedTaskId === taskId) {
+            setProgressModalVisible(false)
+          }
+        }, 2000)
+      }
+    } catch (error) {
+      console.error('获取进度失败:', error)
+    }
+  }
+
   const handleExecute = async (id: number) => {
     setExecuting(id)
+    setSelectedTaskId(id)
+    setProgressModalVisible(true)
     try {
       await syncTaskApi.executeTask(id)
       message.success('任务已启动')
-      // 刷新任务列表
-      setTimeout(loadTasks, 1000)
+      
+      // 开始轮询进度
+      pollProgress(id)
+      pollingTimers.current[id] = setInterval(() => pollProgress(id), 500)
     } catch (error) {
       message.error('启动任务失败')
-    } finally {
       setExecuting(null)
+      setProgressModalVisible(false)
     }
   }
+
+  // 清理轮询定时器
+  useEffect(() => {
+    return () => {
+      Object.values(pollingTimers.current).forEach(timer => clearInterval(timer))
+    }
+  }, [])
 
   const getStatusTag = (status: string) => {
     switch (status) {
@@ -172,6 +221,23 @@ const SyncTasksPage: React.FC = () => {
     { title: '目标表', dataIndex: 'target_table', key: 'target_table' },
     { title: '同步频率', dataIndex: 'sync_frequency', key: 'sync_frequency' },
     { 
+      title: '同步进度',
+      key: 'progress',
+      render: (_: any, record: SyncTask) => {
+        const progress = taskProgress[record.id]
+        if (progress && progress.status !== 'idle' && progress.status !== 'completed' && progress.status !== 'failed') {
+          return (
+            <Progress 
+              percent={progress.progress} 
+              size="small"
+              status={progress.status === 'syncing' ? 'active' : 'normal'}
+            />
+          )
+        }
+        return '-'
+      }
+    },
+    { 
       title: '上次同步时间', 
       dataIndex: 'last_sync_time', 
       key: 'last_sync_time',
@@ -194,6 +260,7 @@ const SyncTasksPage: React.FC = () => {
             icon={<EditOutlined />}
             size="small"
             onClick={() => handleEdit(record)}
+            disabled={executing === record.id}
           >
             编辑
           </Button>
@@ -203,6 +270,7 @@ const SyncTasksPage: React.FC = () => {
             type="primary"
             loading={executing === record.id}
             onClick={() => handleExecute(record.id)}
+            disabled={executing === record.id}
           >
             执行
           </Button>
@@ -211,6 +279,7 @@ const SyncTasksPage: React.FC = () => {
             size="small"
             danger
             onClick={() => handleDelete(record.id)}
+            disabled={executing === record.id}
           >
             删除
           </Button>
@@ -346,6 +415,51 @@ const SyncTasksPage: React.FC = () => {
             </Select>
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="同步任务执行进度"
+        open={progressModalVisible}
+        onCancel={() => setProgressModalVisible(false)}
+        footer={null}
+        width={500}
+      >
+        {selectedTaskId && taskProgress[selectedTaskId] && (
+          <div>
+            <div style={{ marginBottom: 16 }}>
+              <Progress 
+                percent={taskProgress[selectedTaskId].progress}
+                status={
+                  taskProgress[selectedTaskId].status === 'completed' ? 'success' :
+                  taskProgress[selectedTaskId].status === 'failed' ? 'exception' : 'active'
+                }
+              />
+            </div>
+            <div style={{ marginBottom: 8 }}>
+              <strong>状态：</strong>
+              {(() => {
+                const statusMap: { [key: string]: string } = {
+                  'preparing': '准备中',
+                  'connecting': '连接数据库',
+                  'fetching': '获取数据',
+                  'syncing': '同步中',
+                  'completed': '完成',
+                  'failed': '失败',
+                  'idle': '空闲'
+                }
+                return statusMap[taskProgress[selectedTaskId].status] || taskProgress[selectedTaskId].status
+              })()}
+            </div>
+            <div style={{ marginBottom: 8 }}>
+              <strong>提示：</strong>{taskProgress[selectedTaskId].message}
+            </div>
+            <div style={{ display: 'flex', gap: 16, marginTop: 16, paddingTop: 16, borderTop: '1px solid #f0f0f0' }}>
+              <div>总记录数：{taskProgress[selectedTaskId].record_count}</div>
+              <div>成功：{taskProgress[selectedTaskId].success_count}</div>
+              <div>失败：{taskProgress[selectedTaskId].failed_count}</div>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   )

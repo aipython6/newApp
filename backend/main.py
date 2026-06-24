@@ -422,6 +422,29 @@ async def execute_sync_task(task_id: int, db: Session = Depends(get_db), current
     return {"message": "任务已启动"}
 
 
+@app.get("/api/sync-tasks/{task_id}/progress")
+async def get_task_progress(task_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    db_task = db.query(SyncTask).filter(SyncTask.id == task_id).first()
+    if not db_task:
+        raise HTTPException(status_code=404, detail="同步任务不存在")
+    
+    from sync_service import get_sync_progress
+    progress = get_sync_progress(task_id)
+    
+    if progress:
+        return progress
+    else:
+        return {
+            "task_id": task_id,
+            "status": "idle",
+            "progress": 0,
+            "message": "任务未在运行",
+            "record_count": 0,
+            "success_count": 0,
+            "failed_count": 0
+        }
+
+
 @app.get("/api/sync-logs", response_model=List[SyncLogSchema])
 async def get_sync_logs(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     return db.query(SyncLog).order_by(SyncLog.created_at.desc()).limit(100).all()

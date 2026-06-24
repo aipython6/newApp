@@ -142,6 +142,16 @@ export interface DashboardStats {
   total_success_records: number
 }
 
+export interface SyncProgress {
+  task_id: number
+  status: string
+  progress: number
+  message: string
+  record_count: number
+  success_count: number
+  failed_count: number
+}
+
 export const authApi = {
   getCaptcha: () => api.post('/auth/captcha'),
   login: (data: { username: string; password: string; captcha: string; captcha_key: string }) =>
@@ -188,7 +198,8 @@ export const syncTaskApi = {
   createSyncTask: (data: any) => api.post<SyncTask>('/sync-tasks', data),
   updateSyncTask: (id: number, data: any) => api.put<SyncTask>(`/sync-tasks/${id}`, data),
   deleteSyncTask: (id: number) => api.delete(`/sync-tasks/${id}`),
-  executeTask: (id: number) => api.post(`/sync-tasks/${id}/execute`)
+  executeTask: (id: number) => api.post(`/sync-tasks/${id}/execute`),
+  getTaskProgress: (id: number) => api.get<SyncProgress>(`/sync-tasks/${id}/progress`)
 }
 
 export const syncLogApi = {

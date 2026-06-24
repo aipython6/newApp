@@ -7,9 +7,29 @@ from models import SyncTask, SyncLog, SystemMessage, SourceDBConnection, TargetD
 from db_service import test_mysql_connection, get_mysql_columns
 import pymysql
 import threading
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 scheduler = BackgroundScheduler()
+
+# 全局同步进度管理器
+sync_progress: Dict[int, Dict] = {}
+sync_progress_lock = threading.Lock()
+
+
+def update_sync_progress(task_id: int, progress: Optional[Dict] = None):
+    """更新同步任务进度"""
+    with sync_progress_lock:
+        if progress:
+            sync_progress[task_id] = progress
+        else:
+            sync_progress.pop(task_id, None)
+
+
+def get_sync_progress(task_id: int) -> Optional[Dict]:
+    """获取同步任务进度"""
+    with sync_progress_lock:
+        return sync_progress.get(task_id)
 
 
 def sync_task_executor(task_id: int, db: Session):
@@ -23,11 +43,33 @@ def sync_task_executor(task_id: int, db: Session):
     target_cursor = None
 
     try:
+        # 初始化进度
+        update_sync_progress(task_id, {
+            "task_id": task_id,
+            "status": "preparing",
+            "progress": 0,
+            "message": "正在准备同步...",
+            "record_count": 0,
+            "success_count": 0,
+            "failed_count": 0
+        })
+
         source_conn = db.query(SourceDBConnection).filter_by(id=task.source_db_id).first()
         target_conn = db.query(TargetDBConnection).filter_by(id=task.target_db_id).first()
 
         if not source_conn or not target_conn:
             raise Exception("数据库连接不存在")
+
+        # 更新进度：连接数据库
+        update_sync_progress(task_id, {
+            "task_id": task_id,
+            "status": "connecting",
+            "progress": 10,
+            "message": "正在连接数据库...",
+            "record_count": 0,
+            "success_count": 0,
+            "failed_count": 0
+        })
 
         # 使用源数据库的 database 字段连接数据库
         source_db = pymysql.connect(
@@ -48,6 +90,17 @@ def sync_task_executor(task_id: int, db: Session):
         source_cursor = source_db.cursor(pymysql.cursors.DictCursor)
         target_cursor = target_db.cursor()
 
+        # 更新进度：获取源表数据
+        update_sync_progress(task_id, {
+            "task_id": task_id,
+            "status": "fetching",
+            "progress": 20,
+            "message": "正在获取源表数据...",
+            "record_count": 0,
+            "success_count": 0,
+            "failed_count": 0
+        })
+
         # 获取源表数据
         source_cursor.execute(f"SELECT * FROM {task.source_table}")
         source_data = source_cursor.fetchall()
@@ -55,6 +108,17 @@ def sync_task_executor(task_id: int, db: Session):
         success_count = 0
         failed_count = 0
         record_count = len(source_data)
+
+        # 更新进度：开始同步
+        update_sync_progress(task_id, {
+            "task_id": task_id,
+            "status": "syncing",
+            "progress": 30,
+            "message": f"准备同步 {record_count} 条记录...",
+            "record_count": record_count,
+            "success_count": success_count,
+            "failed_count": failed_count
+        })
 
         if record_count > 0:
             # 处理字段映射
@@ -71,7 +135,7 @@ def sync_task_executor(task_id: int, db: Session):
             insert_sql = f"INSERT INTO {task.target_table} ({', '.join(target_columns)}) VALUES ({placeholders})"
             
             # 执行同步
-            for row in source_data:
+            for idx, row in enumerate(source_data):
                 try:
                     values = [row[src_col] for src_col in field_mapping.keys()]
                     target_cursor.execute(insert_sql, values)
@@ -79,8 +143,32 @@ def sync_task_executor(task_id: int, db: Session):
                 except Exception as e:
                     logger.error(f"同步行失败: {str(e)}")
                     failed_count += 1
+                
+                # 每10条记录或最后一条更新一次进度
+                if (idx + 1) % 10 == 0 or (idx + 1) == record_count:
+                    progress = 30 + int((success_count / record_count) * 65)
+                    update_sync_progress(task_id, {
+                        "task_id": task_id,
+                        "status": "syncing",
+                        "progress": progress,
+                        "message": f"正在同步: {success_count}/{record_count} 条记录",
+                        "record_count": record_count,
+                        "success_count": success_count,
+                        "failed_count": failed_count
+                    })
             
             target_db.commit()
+
+        # 更新进度：完成
+        update_sync_progress(task_id, {
+            "task_id": task_id,
+            "status": "completed",
+            "progress": 100,
+            "message": "同步完成",
+            "record_count": record_count,
+            "success_count": success_count,
+            "failed_count": failed_count
+        })
 
         sync_log = SyncLog(
             task_id=task.id,
@@ -105,6 +193,18 @@ def sync_task_executor(task_id: int, db: Session):
 
     except Exception as e:
         logger.error(f"同步任务 {task_id} 执行失败: {str(e)}")
+        
+        # 更新进度：失败
+        update_sync_progress(task_id, {
+            "task_id": task_id,
+            "status": "failed",
+            "progress": 0,
+            "message": f"同步失败: {str(e)}",
+            "record_count": 0,
+            "success_count": 0,
+            "failed_count": 0
+        })
+
         sync_log = SyncLog(
             task_id=task.id,
             status="failed",
@@ -145,6 +245,14 @@ def sync_task_executor(task_id: int, db: Session):
                 target_db.close()
         except:
             pass
+        
+        # 延迟清理进度信息，让前端有时间获取最终状态
+        def cleanup_progress():
+            import time
+            time.sleep(5)
+            update_sync_progress(task_id, None)
+        
+        threading.Thread(target=cleanup_progress, daemon=True).start()
 
 
 def setup_scheduler(db: Session):
