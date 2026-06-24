@@ -129,8 +129,24 @@ const SyncTasksPage: React.FC = () => {
 
   const columns = [
     { title: '任务名称', dataIndex: 'task_name', key: 'task_name' },
-    { title: '源数据库ID', dataIndex: 'source_db_id', key: 'source_db_id' },
-    { title: '目标数据库ID', dataIndex: 'target_db_id', key: 'target_db_id' },
+    { 
+      title: '源数据库', 
+      dataIndex: 'source_db_id', 
+      key: 'source_db_id',
+      render: (id: number) => {
+        const db = sourceDBs.find(d => d.id === id)
+        return db ? db.database : '-'
+      }
+    },
+    { 
+      title: '目标数据库', 
+      dataIndex: 'target_db_id', 
+      key: 'target_db_id',
+      render: (id: number) => {
+        const db = targetDBs.find(d => d.id === id)
+        return db ? db.database : '-'
+      }
+    },
     { title: '源表', dataIndex: 'source_table', key: 'source_table' },
     { title: '目标表', dataIndex: 'target_table', key: 'target_table' },
     { title: '同步频率', dataIndex: 'sync_frequency', key: 'sync_frequency' },
@@ -213,7 +229,7 @@ const SyncTasksPage: React.FC = () => {
           >
             <Select placeholder="请选择源数据库">
               {sourceDBs.map(db => (
-                <Option key={db.id} value={db.id}>{db.name}</Option>
+                <Option key={db.id} value={db.id}>{db.database} ({db.name})</Option>
               ))}
             </Select>
           </Form.Item>
@@ -225,7 +241,7 @@ const SyncTasksPage: React.FC = () => {
           >
             <Select placeholder="请选择目标数据库">
               {targetDBs.map(db => (
-                <Option key={db.id} value={db.id}>{db.name}</Option>
+                <Option key={db.id} value={db.id}>{db.database} ({db.name})</Option>
               ))}
             </Select>
           </Form.Item>

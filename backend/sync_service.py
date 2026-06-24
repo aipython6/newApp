@@ -27,9 +27,64 @@ def sync_task_executor(task_id: int, db: Session):
         if not source_conn or not target_conn:
             raise Exception("数据库连接不存在")
 
+        # 使用源数据库的 database 字段连接数据库
+        source_db = pymysql.connect(
+            host=source_conn.host,
+            port=source_conn.port,
+            user=source_conn.username,
+            password=source_conn.password,
+            database=source_conn.database
+        )
+        target_db = pymysql.connect(
+            host=target_conn.host,
+            port=target_conn.port,
+            user=target_conn.username,
+            password=target_conn.password,
+            database=target_conn.database
+        )
+
+        source_cursor = source_db.cursor(pymysql.cursors.DictCursor)
+        target_cursor = target_db.cursor()
+
+        # 获取源表数据
+        source_cursor.execute(f"SELECT * FROM {task.source_table}")
+        source_data = source_cursor.fetchall()
+
         success_count = 0
         failed_count = 0
-        record_count = 0
+        record_count = len(source_data)
+
+        if record_count > 0:
+            # 处理字段映射
+            field_mapping = task.field_mapping or {}
+            source_columns = list(source_data[0].keys())
+            
+            # 如果没有指定映射，使用默认映射
+            if not field_mapping:
+                field_mapping = {col: col for col in source_columns}
+            
+            # 构建插入语句
+            target_columns = list(field_mapping.values())
+            placeholders = ', '.join(['%s'] * len(target_columns))
+            insert_sql = f"INSERT INTO {task.target_table} ({', '.join(target_columns)}) VALUES ({placeholders})"
+            
+            # 执行同步
+            for row in source_data:
+                try:
+                    values = [row[src_col] for src_col in field_mapping.keys()]
+                    target_cursor.execute(insert_sql, values)
+                    success_count += 1
+                except Exception as e:
+                    logger.error(f"同步行失败: {str(e)}")
+                    failed_count += 1
+            
+            target_db.commit()
+
+        # 关闭连接
+        source_cursor.close()
+        target_cursor.close()
+        source_db.close()
+        target_db.close()
 
         sync_log = SyncLog(
             task_id=task.id,
@@ -45,7 +100,7 @@ def sync_task_executor(task_id: int, db: Session):
 
         message = SystemMessage(
             title=f"同步任务完成: {task.task_name}",
-            content=f"同步任务 {task.task_name} 执行成功，共同步 {success_count} 条记录",
+            content=f"同步任务 {task.task_name} 执行成功，共同步 {record_count} 条记录，成功 {success_count} 条，失败 {failed_count} 条",
             type="success"
         )
         db.add(message)
