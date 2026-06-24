@@ -187,7 +187,8 @@ export const syncTaskApi = {
   getSyncTasks: () => api.get<SyncTask[]>('/sync-tasks'),
   createSyncTask: (data: any) => api.post<SyncTask>('/sync-tasks', data),
   updateSyncTask: (id: number, data: any) => api.put<SyncTask>(`/sync-tasks/${id}`, data),
-  deleteSyncTask: (id: number) => api.delete(`/sync-tasks/${id}`)
+  deleteSyncTask: (id: number) => api.delete(`/sync-tasks/${id}`),
+  executeTask: (id: number) => api.post(`/sync-tasks/${id}/execute`)
 }
 
 export const syncLogApi = {

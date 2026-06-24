@@ -3,9 +3,10 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy.orm import Session
 from datetime import datetime
 import logging
-from models import SyncTask, SyncLog, SystemMessage
+from models import SyncTask, SyncLog, SystemMessage, SourceDBConnection, TargetDBConnection
 from db_service import test_mysql_connection, get_mysql_columns
 import pymysql
+import threading
 
 logger = logging.getLogger(__name__)
 scheduler = BackgroundScheduler()
@@ -16,13 +17,14 @@ def sync_task_executor(task_id: int, db: Session):
     if not task:
         return
 
+    source_db = None
+    target_db = None
+    source_cursor = None
+    target_cursor = None
+
     try:
-        source_conn = db.query(
-            __import__('models').models.SourceDBConnection
-        ).filter_by(id=task.source_db_id).first()
-        target_conn = db.query(
-            __import__('models').models.TargetDBConnection
-        ).filter_by(id=task.target_db_id).first()
+        source_conn = db.query(SourceDBConnection).filter_by(id=task.source_db_id).first()
+        target_conn = db.query(TargetDBConnection).filter_by(id=task.target_db_id).first()
 
         if not source_conn or not target_conn:
             raise Exception("数据库连接不存在")
@@ -31,15 +33,15 @@ def sync_task_executor(task_id: int, db: Session):
         source_db = pymysql.connect(
             host=source_conn.host,
             port=source_conn.port,
-            user=source_conn.username,
-            password=source_conn.password,
+            user=source_conn.username or "",
+            password=source_conn.password or "",
             database=source_conn.database
         )
         target_db = pymysql.connect(
             host=target_conn.host,
             port=target_conn.port,
-            user=target_conn.username,
-            password=target_conn.password,
+            user=target_conn.username or "",
+            password=target_conn.password or "",
             database=target_conn.database
         )
 
@@ -79,12 +81,6 @@ def sync_task_executor(task_id: int, db: Session):
                     failed_count += 1
             
             target_db.commit()
-
-        # 关闭连接
-        source_cursor.close()
-        target_cursor.close()
-        source_db.close()
-        target_db.close()
 
         sync_log = SyncLog(
             task_id=task.id,
@@ -127,6 +123,28 @@ def sync_task_executor(task_id: int, db: Session):
         db.add(message)
 
         db.commit()
+    finally:
+        # 确保关闭所有数据库连接
+        try:
+            if source_cursor:
+                source_cursor.close()
+        except:
+            pass
+        try:
+            if target_cursor:
+                target_cursor.close()
+        except:
+            pass
+        try:
+            if source_db:
+                source_db.close()
+        except:
+            pass
+        try:
+            if target_db:
+                target_db.close()
+        except:
+            pass
 
 
 def setup_scheduler(db: Session):

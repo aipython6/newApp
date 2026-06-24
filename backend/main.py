@@ -36,7 +36,7 @@ from db_service import (
     get_jxks_db_connection, execute_sql
 )
 from knowledge_service import knowledge_service
-from sync_service import setup_scheduler, add_task_to_scheduler, remove_task_from_scheduler
+from sync_service import setup_scheduler, add_task_to_scheduler, remove_task_from_scheduler, sync_task_executor
 
 settings = get_settings()
 
@@ -343,7 +343,19 @@ async def get_sync_tasks(db: Session = Depends(get_db), current_user: User = Dep
 
 @app.post("/api/sync-tasks", response_model=SyncTaskSchema)
 async def create_sync_task(task: SyncTaskCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    db_task = SyncTask(**task.dict())
+    task_data = task.dict()
+    # 处理 sync_time 字段，将时间字符串转换为完整 datetime（使用今天的日期）
+    if task_data.get('sync_time') and isinstance(task_data['sync_time'], str):
+        from datetime import datetime, time
+        time_str = task_data['sync_time']
+        try:
+            # 解析时间字符串（格式：HH:mm:ss
+            t = datetime.strptime(time_str, '%H:%M:%S').time()
+            # 组合成完整的 datetime
+            task_data['sync_time'] = datetime.combine(datetime.utcnow().date(), t)
+        except:
+            task_data['sync_time'] = None
+    db_task = SyncTask(**task_data)
     db.add(db_task)
     db.commit()
     db.refresh(db_task)
@@ -356,7 +368,20 @@ async def update_sync_task(task_id: int, task_update: SyncTaskUpdate, db: Sessio
     db_task = db.query(SyncTask).filter(SyncTask.id == task_id).first()
     if not db_task:
         raise HTTPException(status_code=404, detail="同步任务不存在")
-    for key, value in task_update.dict(exclude_unset=True).items():
+    
+    task_data = task_update.dict(exclude_unset=True)
+    # 处理 sync_time 字段
+    if 'sync_time' in task_data:
+        sync_time = task_data['sync_time']
+        if sync_time and isinstance(sync_time, str):
+            from datetime import datetime, time
+            try:
+                t = datetime.strptime(sync_time, '%H:%M:%S').time()
+                task_data['sync_time'] = datetime.combine(datetime.utcnow().date(), t)
+            except:
+                task_data['sync_time'] = None
+    
+    for key, value in task_data.items():
         setattr(db_task, key, value)
     db.commit()
     db.refresh(db_task)
@@ -373,6 +398,28 @@ async def delete_sync_task(task_id: int, db: Session = Depends(get_db), current_
     db.delete(db_task)
     db.commit()
     return {"message": "删除成功"}
+
+
+@app.post("/api/sync-tasks/{task_id}/execute")
+async def execute_sync_task(task_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    db_task = db.query(SyncTask).filter(SyncTask.id == task_id).first()
+    if not db_task:
+        raise HTTPException(status_code=404, detail="同步任务不存在")
+    
+    # 在后台线程中执行任务
+    import threading
+    def run_task():
+        from database import SessionLocal
+        db_session = SessionLocal()
+        try:
+            sync_task_executor(task_id, db_session)
+        finally:
+            db_session.close()
+    
+    thread = threading.Thread(target=run_task)
+    thread.start()
+    
+    return {"message": "任务已启动"}
 
 
 @app.get("/api/sync-logs", response_model=List[SyncLogSchema])

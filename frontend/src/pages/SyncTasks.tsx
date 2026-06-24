@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react'
 import { Table, Button, Modal, Form, Input, InputNumber, Select, message, Space, Tag, DatePicker } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
+import { PlusOutlined, EditOutlined, DeleteOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import { syncTaskApi, SyncTask, sourceDBApi, targetDBApi, SourceDB, TargetDB } from '../api'
-import type { Dayjs } from 'dayjs'
+import dayjs, { Dayjs } from 'dayjs'
 import { formatToUTC8 } from '../utils/timeUtils'
 
 const { Option } = Select
@@ -16,6 +16,7 @@ const SyncTasksPage: React.FC = () => {
   const [editingId, setEditingId] = useState<number | null>(null)
   const [form] = Form.useForm()
   const [fieldMapping, setFieldMapping] = useState<string>('{}')
+  const [executing, setExecuting] = useState<number | null>(null)
 
   useEffect(() => {
     loadTasks()
@@ -60,10 +61,16 @@ const SyncTasksPage: React.FC = () => {
   const handleEdit = (record: SyncTask) => {
     setEditingId(record.id)
     form.setFieldsValue({
-      ...record,
-      sync_time: record.sync_time ? record.sync_time : null
+      task_name: record.task_name,
+      source_db_id: record.source_db_id,
+      target_db_id: record.target_db_id,
+      source_table: record.source_table,
+      target_table: record.target_table,
+      sync_frequency: record.sync_frequency,
+      sync_time: record.sync_time ? dayjs(record.sync_time) : null,
+      is_active: record.is_active
     })
-    setFieldMapping(JSON.stringify(record.field_mapping, null, 2))
+    setFieldMapping(JSON.stringify(record.field_mapping || {}, null, 2))
     setModalVisible(true)
   }
 
@@ -99,7 +106,7 @@ const SyncTasksPage: React.FC = () => {
       const data = {
         ...values,
         field_mapping: parsedMapping,
-        sync_time: values.sync_time ? values.sync_time : null
+        sync_time: values.sync_time ? values.sync_time.format('HH:mm:ss') : null
       }
 
       if (editingId) {
@@ -113,6 +120,20 @@ const SyncTasksPage: React.FC = () => {
       loadTasks()
     } catch (error) {
       message.error('保存失败')
+    }
+  }
+
+  const handleExecute = async (id: number) => {
+    setExecuting(id)
+    try {
+      await syncTaskApi.executeTask(id)
+      message.success('任务已启动')
+      // 刷新任务列表
+      setTimeout(loadTasks, 1000)
+    } catch (error) {
+      message.error('启动任务失败')
+    } finally {
+      setExecuting(null)
     }
   }
 
@@ -175,6 +196,15 @@ const SyncTasksPage: React.FC = () => {
             onClick={() => handleEdit(record)}
           >
             编辑
+          </Button>
+          <Button
+            icon={<PlayCircleOutlined />}
+            size="small"
+            type="primary"
+            loading={executing === record.id}
+            onClick={() => handleExecute(record.id)}
+          >
+            执行
           </Button>
           <Button
             icon={<DeleteOutlined />}
